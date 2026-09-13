@@ -9,8 +9,8 @@
 // -------------------------------------------------------------
 // 1. NETWORK CREDENTIALS
 // -------------------------------------------------------------
-const char* ssid     = "PLDTHOMEFIBRQ5N9G";
-const char* password = "@Dioelamiafortezza2";
+const char* ssid     = "YOUR WIFI NAME HERE";
+const char* password = "YOUR WIFI PASSWORD HERE";
 const char* hostName = "smartdrawer";
 
 const char* ntpServer = "pool.ntp.org";
