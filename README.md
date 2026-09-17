@@ -7,6 +7,7 @@ Access the dashboard from any phone/laptop on the same Wi-Fi at `http://smartdra
 ## Features
 
 - **Fingerprint unlock** — Fast search via optical fingerprint sensor (up to 300 IDs)
+- **No hardcoded Wi-Fi** — Credentials stored in flash; first boot starts a `SmartDrawer-Setup` captive portal (network scan + save & reboot), changeable later from the dashboard Wi-Fi panel or a 5 s button hold
 - **Web dashboard (mobile-first)** — Live lock status, user count, Wi-Fi signal, activity feed
 - **Remote unlock** — One-tap unlock from the web UI
 - **User management** — Rename and delete fingerprints from the browser, names saved in flash via `Preferences`
@@ -60,12 +61,12 @@ SmartDrawer/
 
 1. Clone / copy this folder and open `SmartDrawer.ino` in Arduino IDE.
 2. Select your board: `Tools > Board > ESP32 Arduino > ESP32 Dev Module`, then select the correct COM port.
-3. Set your Wi-Fi credentials in the code before flashing:
+3. No need to edit Wi-Fi credentials in code — they're configured on-device (see First Boot below). Optionally change the setup AP / hostname at the top of the `.ino`:
 
 ```cpp
-const char* ssid     = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
 const char* hostName = "smartdrawer"; // -> http://smartdrawer.local
+const char* AP_SSID = "SmartDrawer-Setup";
+const char* AP_PASS = "12345678";     // setup-portal password (min 8 chars)
 ```
 
 4. Adjust time zone if needed:
@@ -75,10 +76,14 @@ const long gmtOffset_sec = 8 * 3600; // e.g. Philippines = UTC+8
 const int  daylightOffset_sec = 0;
 ```
 
-5. Upload to the ESP32, then open Serial Monitor at **115200 baud** to see:
-   - `>> Indexing enrolled fingerprints... Done! Found N users.`
-   - Wi-Fi connection dots, then `>> mDNS Started! Access at: http://smartdrawer.local`
-6. Connect your phone/laptop to the same Wi-Fi and open `http://smartdrawer.local` (or the IP shown in Serial Monitor).
+5. Upload to the ESP32, then open Serial Monitor at **115200 baud**.
+6. **First boot (new user / new Wi-Fi):**
+   - Drawer tries saved Wi-Fi for ~15 s. If none saved (or it fails), it starts setup mode: join Wi-Fi **`SmartDrawer-Setup`** (password `12345678`).
+   - A captive portal should pop up; if not, open `http://192.168.4.1`.
+   - Pick your home network from the scanned list (or type it), enter password, hit **Save & Connect**.
+   - Drawer reboots, connects, then serves the dashboard at `http://smartdrawer.local` (or the IP in Serial Monitor).
+7. **Changing Wi-Fi later (same LAN):** open dashboard → **Wi-Fi** panel → enter new SSID/password → **Save & reconnect**. Or **Forget** to reboot back into setup mode.
+8. **No LAN access?** Hold the enroll button **5+ seconds** → triple-beep → credentials erased → reboots into `SmartDrawer-Setup` mode.
 
 ## Usage
 
@@ -90,13 +95,15 @@ const int  daylightOffset_sec = 0;
 If the print is unknown: triple-beep + `Denied: Unknown Print` log entry.
 
 ### Enroll a new fingerprint
-1. Press and release the button on GPIO 14.
+1. Press and **release quickly** the button on GPIO 14 (< 5 s).
 2. You hear the admin double-beep, Serial / dashboard shows `Enrolling: ID #N`.
 3. Place finger → remove when prompted (short beep) → place same finger again.
 4. Long beep = success (`Registered: ID #N`). Triple-beep = failed / timeout (10 s per scan).
 5. Rename the new `User #N` from the web dashboard.
 
 Enrollment always uses the first free ID from 1–300.
+
+> Hold the same button **5+ seconds** to forget Wi-Fi and reboot into setup mode (triple-beep confirms).
 
 ### Web dashboard
 Polls `/api/status` every 2 seconds:
@@ -106,24 +113,34 @@ Polls `/api/status` every 2 seconds:
 - **Metrics:** Registered Users count, Wi-Fi RSSI (dBm)
 - **Registered User Profiles:** `ID #N` + editable name field + `Save` + delete (🗑️) buttons
 - **Live Security Activity:** newest-first feed of the last 10 events
+- **Wi-Fi panel:** shows current SSID/IP, `Save & reconnect` to move networks, `Forget` to reboot into setup AP
 
 ## API Reference
 
 | Method | Endpoint | Params | Description |
 |---|---|---|---|
-| `GET` | `/` | — | Mobile-first HTML dashboard |
-| `GET` | `/api/status` | — | JSON: `{ unlocked, users, rssi, userProfiles[{id,name}], logs[{time,msg,type}] }` |
+| `GET` | `/` | — | Dashboard (or Wi-Fi setup portal when in AP mode) |
+| `GET` | `/api/status` | — | JSON: `{ unlocked, users, rssi, ssid, ip, apMode, userProfiles[{id,name}], logs[{time,msg,type}] }` |
 | `POST` | `/api/unlock` | — | Remote unlock, logs `Unlocked: Web Remote` |
 | `POST` | `/api/rename` | `?id=N&name=String` | Rename user, saved to `Preferences` namespace `user_names` |
 | `POST` | `/api/delete` | `?id=N` | Delete fingerprint model + name, updates RAM cache |
+| `GET` | `/api/wifi` | — | JSON: `{ ssid, ip, apMode }` |
+| `POST` | `/api/wifisave` | `?ssid=String&pass=String` | Save new Wi-Fi to flash (`wifi_cfg`), reboot & connect |
+| `POST` | `/api/wifireset` | — | Erase Wi-Fi, reboot into `SmartDrawer-Setup` AP |
+| `GET` | `/api/scan` | — | JSON list of nearby networks `[{ssid, rssi}]` |
+| `POST` | `/wifisave` | form `ssid`, `pass` | Same as `/api/wifisave`, used by captive-portal form |
 
 Example:
 
 ```bash
 curl http://smartdrawer.local/api/status
+curl http://smartdrawer.local/api/wifi
+curl http://smartdrawer.local/api/scan
 curl -X POST "http://smartdrawer.local/api/rename?id=1&name=Alice"
 curl -X POST "http://smartdrawer.local/api/delete?id=2"
 curl -X POST http://smartdrawer.local/api/unlock
+curl -X POST "http://smartdrawer.local/api/wifisave?ssid=HomeWiFi&pass=secret"
+curl -X POST http://smartdrawer.local/api/wifireset
 ```
 
 ## Buzzer & Log Behavior
@@ -167,6 +184,7 @@ const int MAX_LOGS = 10;                    // web activity feed length
 - **Stuck at boot / no Serial output:** check `Serial2` wiring (ESP32 RX26 ↔ sensor TX, ESP32 TX27 ↔ sensor RX), sensor baud 57600, common GND.
 - **`verifyPassword` fails / hangs:** wrong sensor wiring, wrong baud, or 5V sensor powered from weak 3.3V rail.
 - **Can't open `smartdrawer.local`:** mDNS needs same subnet + mDNS support (Bonjour on Windows, Avahi on Linux). Use the IP from Serial Monitor as fallback.
+- **Stuck in setup mode / saved Wi-Fi fails:** rejoin `SmartDrawer-Setup`, open `http://192.168.4.1`, re-enter credentials. To force setup mode, hold the button 5+ s or `POST /api/wifireset`.
 - **`Time Syncing...` in logs:** NTP (`pool.ntp.org`) unreachable — check internet access; time fixes itself once online.
 - **Slow dashboard:** normally caused by skipping `refreshEnrolledCache()` — this build already caches IDs in RAM, keep it.
 - **Enrollment times out:** 10 s per scan, lift finger fully between scans, wipe sensor if oily.
