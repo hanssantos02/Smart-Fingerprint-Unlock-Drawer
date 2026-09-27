@@ -32,6 +32,7 @@ DNSServer dnsServer;
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&Serial2);
 WebServer server(80);
 Preferences prefs;
+bool fingerprintOK = false;
 
 // -------------------------------------------------------------
 // 3. SYSTEM STATE, LOGS & ACTIVE USERS CACHE
@@ -645,6 +646,10 @@ void handleApiRename() {
 }
 
 void handleApiDelete() {
+  if (!fingerprintOK) {
+    server.send(500, "text/plain", "No sensor connected");
+    return;
+  }
   if (server.hasArg("id")) {
     int id = server.arg("id").toInt();
     String name = getUserName(id);
@@ -835,8 +840,9 @@ void registerWebRoutes() {
 // -------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
   delay(1000);
+  Serial.println();
+  Serial.println(">> SmartDrawer booting...");
 
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(LOCK_PIN, OUTPUT);
@@ -846,12 +852,17 @@ void setup() {
   digitalWrite(LOCK_PIN, LOW);
 
   Serial2.begin(57600, SERIAL_8N1, 26, 27);
+  delay(200);
   if (!finger.verifyPassword()) {
-    while (1) { delay(1); }
+    Serial.println(">> WARNING: Fingerprint sensor NOT FOUND - check wiring (26/27, 57600, GND). Continuing without biometrics.");
+    fingerprintOK = false;
+    addLog("Sensor missing (check wiring)", "danger");
+  } else {
+    Serial.println(">> Fingerprint sensor found.");
+    fingerprintOK = true;
+    // Build the instant RAM cache on boot
+    refreshEnrolledCache();
   }
-
-  // Build the instant RAM cache on boot
-  refreshEnrolledCache();
 
   // --- Wi-Fi: try saved credentials, else start setup portal ---
   loadWiFiCredentials();
@@ -919,6 +930,7 @@ void loop() {
 // 9. BIOMETRIC ACCESS CHECK
 // -------------------------------------------------------------
 void checkFingerprintAccess() {
+  if (!fingerprintOK) return;
   uint8_t p = finger.getImage();
   if (p != FINGERPRINT_OK) return;
   p = finger.image2Tz();
@@ -939,6 +951,11 @@ void checkFingerprintAccess() {
 // 10. ADMIN ENROLLMENT
 // -------------------------------------------------------------
 void runEnrollmentRoutine() {
+  if (!fingerprintOK) {
+    Serial.println(">> Enroll blocked: no fingerprint sensor.");
+    beepDenied();
+    return;
+  }
   beepAdminMode();
   
   // Find first vacant slot
